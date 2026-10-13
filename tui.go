@@ -7,7 +7,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"unicode"
 
+	"golang.org/x/sys/unix"
 	"golang.org/x/term"
 )
 
@@ -27,8 +29,7 @@ func browse(root string, items []entry) error {
 	if !term.IsTerminal(int(os.Stdin.Fd())) {
 		return fmt.Errorf("browse requires a terminal")
 	}
-	rows := buildRows(root, items)
-	selected := 0
+	state := browserState{root: root, all: items, visible: items}
 	for {
 		old, err := term.MakeRaw(int(os.Stdin.Fd()))
 		if err != nil {
@@ -39,35 +40,14 @@ func browse(root string, items []entry) error {
 		playIndex := -1
 		quit := false
 		for !quit && playIndex < 0 {
-			draw(root, rows, selected)
-			b, err := reader.ReadByte()
+			draw(root, buildRows(root, state.visible), state.selected, state.query, state.searching)
+			key, err := readKey(reader)
 			if err != nil {
+				fmt.Print("\x1b[?25h")
 				term.Restore(int(os.Stdin.Fd()), old)
 				return err
 			}
-			switch b {
-			case 'q', 3:
-				quit = true
-			case 'j':
-				selected = (selected + 1) % len(items)
-			case 'k':
-				selected = (selected + len(items) - 1) % len(items)
-			case '\r', '\n':
-				playIndex = selected
-			case 27:
-				b2, _ := reader.ReadByte()
-				if b2 != '[' {
-					quit = true
-					break
-				}
-				b3, _ := reader.ReadByte()
-				if b3 == 'A' {
-					selected = (selected + len(items) - 1) % len(items)
-				}
-				if b3 == 'B' {
-					selected = (selected + 1) % len(items)
-				}
-			}
+			playIndex, quit = state.handle(key)
 		}
 		fmt.Print("\x1b[?25h\x1b[2J\x1b[H")
 		if err := term.Restore(int(os.Stdin.Fd()), old); err != nil {
@@ -76,11 +56,128 @@ func browse(root string, items []entry) error {
 		if quit {
 			return nil
 		}
-		fmt.Printf("Playing %s\n", items[playIndex].name)
-		if err := play(items[playIndex]); err != nil {
+		fmt.Printf("Playing %s\n", state.visible[playIndex].name)
+		if err := play(state.visible[playIndex]); err != nil {
 			return err
 		}
 	}
+}
+
+type browserState struct {
+	root         string
+	all, visible []entry
+	query        string
+	selected     int
+	searching    bool
+}
+
+func (s *browserState) filter() {
+	s.visible = nil
+	query := strings.ToLower(s.query)
+	for _, e := range s.all {
+		dir, _ := filepath.Rel(s.root, filepath.Dir(e.path))
+		if strings.Contains(strings.ToLower(filepath.Join(dir, e.name)), query) {
+			s.visible = append(s.visible, e)
+		}
+	}
+	s.selected = 0
+}
+
+func (s *browserState) handle(key string) (playIndex int, quit bool) {
+	playIndex = -1
+	if key == "\x03" {
+		return -1, true
+	}
+	if key == "escape" || key == "\x15" {
+		s.query = ""
+		if key == "escape" {
+			s.searching = false
+		}
+		s.filter()
+		return
+	}
+	if key == "up" || key == "down" || !s.searching && (key == "j" || key == "k") {
+		if len(s.visible) > 0 {
+			delta := 1
+			if key == "up" || key == "k" {
+				delta = -1
+			}
+			s.selected = (s.selected + delta + len(s.visible)) % len(s.visible)
+		}
+		return
+	}
+	if s.searching {
+		switch key {
+		case "\r", "\n":
+			s.searching = false
+		case "\x7f", "\b":
+			runes := []rune(s.query)
+			if len(runes) > 0 {
+				s.query = string(runes[:len(runes)-1])
+				s.filter()
+			}
+		default:
+			if len([]rune(key)) == 1 && unicode.IsPrint([]rune(key)[0]) {
+				s.query += key
+				s.filter()
+			}
+		}
+		return
+	}
+	switch key {
+	case "/":
+		s.searching = true
+	case "q":
+		quit = true
+	case "\r", "\n":
+		if len(s.visible) > 0 {
+			playIndex = s.selected
+		}
+	}
+	return
+}
+
+func readKey(reader *bufio.Reader) (string, error) {
+	r, _, err := reader.ReadRune()
+	if err != nil {
+		return "", err
+	}
+	if r != 27 {
+		return string(r), nil
+	}
+	ready := func() bool {
+		if reader.Buffered() > 0 {
+			return true
+		}
+		fds := []unix.PollFd{{Fd: int32(os.Stdin.Fd()), Events: unix.POLLIN}}
+		n, err := unix.Poll(fds, 50)
+		return err == nil && n > 0 && fds[0].Revents&unix.POLLIN != 0
+	}
+	if !ready() {
+		return "escape", nil
+	}
+	prefix, err := reader.Peek(1)
+	if err != nil {
+		return "", err
+	}
+	if prefix[0] != '[' && prefix[0] != 'O' {
+		return "escape", nil
+	}
+	reader.ReadByte()
+	if !ready() {
+		return "escape", nil
+	}
+	b, err := reader.ReadByte()
+	if err != nil {
+		return "", err
+	}
+	switch b {
+	case 'A':
+		return "up", nil
+	case 'B':
+		return "down", nil
+	}
+	return "", nil
 }
 
 func buildRows(root string, items []entry) []row {
@@ -113,7 +210,7 @@ func buildRows(root string, items []entry) []row {
 	return rows
 }
 
-func draw(root string, rows []row, selected int) {
+func draw(root string, rows []row, selected int, query string, searching bool) {
 	_, height, err := term.GetSize(int(os.Stdout.Fd()))
 	if err != nil || height < 6 {
 		height = 24
@@ -129,18 +226,22 @@ func draw(root string, rows []row, selected int) {
 	if start < 0 {
 		start = 0
 	}
-	if start > len(rows)-(height-3) {
-		start = len(rows) - (height - 3)
+	if start > len(rows)-(height-4) {
+		start = len(rows) - (height - 4)
 	}
 	if start < 0 {
 		start = 0
 	}
-	end := start + height - 3
+	end := start + height - 4
 	if end > len(rows) {
 		end = len(rows)
 	}
 	fmt.Print("\x1b[2J\x1b[H")
 	fmt.Printf("\x1b[1m%s\x1b[0m\r\n", root)
+	fmt.Printf("Search: %s\r\n", query)
+	if len(rows) == 0 {
+		fmt.Print("\x1b[2mNo matches.\x1b[0m\r\n")
+	}
 	for _, r := range rows[start:end] {
 		prefix := "  "
 		if r.item == selected {
@@ -152,7 +253,11 @@ func draw(root string, rows []row, selected int) {
 		}
 		fmt.Print("\r\n")
 	}
-	fmt.Print("\x1b[2m↑↓ select  enter play  q quit\x1b[0m\r\n")
+	if searching {
+		fmt.Print("\x1b[2mtype to filter  enter done  esc clear\x1b[0m\r\n")
+	} else {
+		fmt.Print("\x1b[2m↑↓ select  enter play  / search  esc clear  q quit\x1b[0m\r\n")
+	}
 }
 
 func execIINA() (string, error) {

@@ -10,6 +10,8 @@ v unlock [directory]  # restore all videos
 
 The default directory is the current directory. Supported: MP4, MKV, MOV, M4V, AVI, WebM, WMV, FLV, MPG, MPEG, TS, 3GP. Other files cause an error (`.DS_Store` is ignored). Symlinks are rejected.
 
+In the browser, press `/` to filter by video or folder name (case-insensitive). Enter confirms the filter; Enter again plays the selection. Esc clears the filter. Backspace edits and Ctrl-U clears the search text.
+
 Vault files are hidden `.vault-*.vlt` files next to the originals. Folder names remain visible. Playback serves decrypted byte ranges only through a temporary loopback URL; no plaintext video is written by `v`. Closing IINA stops the local server. IINA itself controls its own playback cache.
 
 ## Recovery
