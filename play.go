@@ -81,37 +81,12 @@ func play(e entry) error {
 		cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 		return cmd.Run()
 	}
-	f, err := os.Open(e.path)
+	url, closeStream, err := streamVideo(e)
 	if err != nil {
 		return err
 	}
-	defer f.Close()
-	h, err := readHeader(f)
-	if err != nil {
-		return err
-	}
-	info, err := f.Stat()
-	if err != nil {
-		return err
-	}
-	if info.Size() != h.offset+h.size {
-		return errors.New("invalid vault size")
-	}
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		return err
-	}
-	defer listener.Close()
-	var token [24]byte
-	if _, err = rand.Read(token[:]); err != nil {
-		return err
-	}
-	path := "/" + hex.EncodeToString(token[:]) + filepath.Ext(h.name)
-	server := &http.Server{Handler: videoHandler(f, h, path), ReadHeaderTimeout: 5 * time.Second}
-	go server.Serve(listener)
-	defer server.Close()
-	url := "http://" + listener.Addr().String() + path
-	cmd := exec.Command(iina, "--no-stdin", "--separate-windows", "--keep-running", "--mpv-force-media-title="+h.name, url)
+	defer closeStream()
+	cmd := exec.Command(iina, "--no-stdin", "--separate-windows", "--keep-running", "--mpv-force-media-title="+displayText(e.name), url)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("IINA: %w", err)
@@ -119,7 +94,54 @@ func play(e entry) error {
 	return nil
 }
 
+// Both consumers use the same short-lived loopback stream. Plaintext exists
+// only in request buffers; even seek-heavy formats never require a temp file.
+func streamVideo(e entry) (string, func(), error) {
+	f, err := os.Open(e.path)
+	if err != nil {
+		return "", nil, err
+	}
+	info, err := f.Stat()
+	if err != nil {
+		f.Close()
+		return "", nil, err
+	}
+	h := header{name: e.name, size: info.Size()}
+	if e.locked {
+		h, err = readHeader(f)
+		if err != nil {
+			f.Close()
+			return "", nil, err
+		}
+		if info.Size() != h.offset+h.size {
+			f.Close()
+			return "", nil, errors.New("invalid vault size")
+		}
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		f.Close()
+		return "", nil, err
+	}
+	var token [24]byte
+	if _, err = rand.Read(token[:]); err != nil {
+		listener.Close()
+		f.Close()
+		return "", nil, err
+	}
+	path := "/" + hex.EncodeToString(token[:]) + filepath.Ext(h.name)
+	handler := contentHandler(f, h, path, e.locked)
+	server := &http.Server{Handler: handler, ReadHeaderTimeout: 5 * time.Second}
+	go server.Serve(listener)
+	url := "http://" + listener.Addr().String() + path
+	return url, func() { server.Close(); f.Close() }, nil
+}
+
 func videoHandler(f *os.File, h header, path string) http.Handler {
+	return contentHandler(f, h, path, true)
+}
+
+func contentHandler(f *os.File, h header, path string, locked bool) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		if req.URL.Path != path || req.Method != http.MethodGet && req.Method != http.MethodHead {
 			http.NotFound(w, req)
@@ -128,7 +150,10 @@ func videoHandler(f *os.File, h header, path string) http.Handler {
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Content-Type", videoType(filepath.Ext(h.name)))
-		reader := &videoReader{f: f, h: h}
+		var reader io.ReadSeeker = &videoReader{f: f, h: h}
+		if !locked {
+			reader = io.NewSectionReader(f, 0, h.size)
+		}
 		http.ServeContent(w, req, h.name, time.Time{}, reader)
 	})
 }

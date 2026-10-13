@@ -1,0 +1,167 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"encoding/base64"
+	"errors"
+	"fmt"
+	"image/png"
+	"io"
+	"os"
+	"os/exec"
+	"strings"
+	"time"
+)
+
+const previewImageID = 762451
+const maxPreviewBytes = 2 << 20
+
+type boundedImage struct{ buffer bytes.Buffer }
+
+func (b *boundedImage) Bytes() []byte { return b.buffer.Bytes() }
+
+func (b *boundedImage) Write(p []byte) (int, error) {
+	if len(p) > maxPreviewBytes-b.buffer.Len() {
+		return 0, errors.New("thumbnail too large")
+	}
+	return b.buffer.Write(p)
+}
+
+func thumbnail(ctx context.Context, e entry) ([]byte, error) {
+	ffmpeg, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		return nil, errors.New("ffmpeg required")
+	}
+	url, closeStream, err := streamVideo(e)
+	if err != nil {
+		return nil, err
+	}
+	defer closeStream()
+	// No filenames, temp files, persistent cache, or decoder output logs.
+	cmd := exec.CommandContext(ctx, ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error",
+		"-threads", "1", "-protocol_whitelist", "http,tcp", "-rw_timeout", "5000000", "-i", url,
+		"-map", "0:v:0", "-an", "-sn", "-dn", "-frames:v", "1",
+		"-vf", "scale=480:270:force_original_aspect_ratio=decrease", "-threads", "1", "-f", "image2pipe", "-c:v", "png", "pipe:1")
+	var output boundedImage
+	cmd.Stdout = &output
+	cmd.WaitDelay = time.Second
+	if err = cmd.Run(); err != nil {
+		clear(output.Bytes())
+		return nil, err
+	}
+	if _, err = png.DecodeConfig(bytes.NewReader(output.Bytes())); err != nil {
+		clear(output.Bytes())
+		return nil, err
+	}
+	return output.Bytes(), nil
+}
+
+type previewResult struct {
+	generation int
+	data       []byte
+	err        error
+}
+type previews struct {
+	results    chan previewResult
+	cancel     context.CancelFunc
+	done       <-chan struct{}
+	generation int
+}
+
+func newPreviews() *previews { return &previews{results: make(chan previewResult, 1)} }
+
+func (p *previews) stop() {
+	if p.cancel != nil {
+		p.cancel()
+		p.cancel = nil
+	}
+	p.generation++
+}
+
+func (p *previews) start(e entry) {
+	p.stop()
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	p.cancel = cancel
+	previous := p.done
+	done := make(chan struct{})
+	p.done = done
+	generation := p.generation
+	go func() {
+		defer close(done)
+		defer cancel()
+		// Serialize decoders, including cancellation, and debounce navigation.
+		if previous != nil {
+			<-previous
+		}
+		timer := time.NewTimer(180 * time.Millisecond)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return
+		case <-timer.C:
+		}
+		data, err := thumbnail(ctx, e)
+		if ctx.Err() != nil {
+			clear(data)
+			return
+		}
+		select {
+		case p.results <- previewResult{generation, data, err}:
+		case <-ctx.Done():
+			clear(data)
+		}
+	}()
+}
+
+func (p *previews) close() {
+	p.stop()
+	if p.done != nil {
+		<-p.done
+	}
+	for {
+		select {
+		case result := <-p.results:
+			clear(result.data)
+		default:
+			return
+		}
+	}
+}
+
+func graphicsSupported() bool {
+	if os.Getenv("TMUX") != "" {
+		return false
+	}
+	return os.Getenv("TERM_PROGRAM") == "ghostty" || strings.Contains(os.Getenv("TERM"), "ghostty") || os.Getenv("KITTY_WINDOW_ID") != ""
+}
+
+func deletePreview(w io.Writer) { fmt.Fprintf(w, "\x1b_Ga=d,d=I,i=%d,q=2\x1b\\", previewImageID) }
+
+func renderPreview(w io.Writer, data []byte, column, row, columns, rows int) {
+	if len(data) == 0 {
+		return
+	}
+	fmt.Fprintf(w, "\x1b[%d;%dH", row, column)
+	var encoded [4096]byte
+	first := true
+	for len(data) > 0 {
+		n := min(3072, len(data))
+		size := base64.StdEncoding.EncodedLen(n)
+		base64.StdEncoding.Encode(encoded[:size], data[:n])
+		data = data[n:]
+		more := 0
+		if len(data) > 0 {
+			more = 1
+		}
+		if first {
+			fmt.Fprintf(w, "\x1b_Ga=T,t=d,f=100,i=%d,c=%d,r=%d,C=1,q=2,m=%d;", previewImageID, columns, rows, more)
+			first = false
+		} else {
+			fmt.Fprintf(w, "\x1b_Gq=2,m=%d;", more)
+		}
+		w.Write(encoded[:size])
+		fmt.Fprint(w, "\x1b\\")
+	}
+	clear(encoded[:])
+}

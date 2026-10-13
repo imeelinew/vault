@@ -5,10 +5,13 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"unicode"
 
+	"github.com/charmbracelet/x/ansi"
 	"golang.org/x/sys/unix"
 	"golang.org/x/term"
 	"golang.org/x/text/unicode/norm"
@@ -32,26 +35,8 @@ func browse(root string, items []entry) error {
 	}
 	state := browserState{root: root, all: items, visible: items}
 	for {
-		old, err := term.MakeRaw(int(os.Stdin.Fd()))
+		playIndex, quit, err := browseSession(&state)
 		if err != nil {
-			return err
-		}
-		fmt.Print("\x1b[?25l")
-		reader := bufio.NewReader(os.Stdin)
-		playIndex := -1
-		quit := false
-		for !quit && playIndex < 0 {
-			draw(root, buildRows(root, state.visible), state.selected, state.query, state.searching)
-			key, err := readKey(reader)
-			if err != nil {
-				fmt.Print("\x1b[?25h")
-				term.Restore(int(os.Stdin.Fd()), old)
-				return err
-			}
-			playIndex, quit = state.handle(key)
-		}
-		fmt.Print("\x1b[?25h\x1b[2J\x1b[H")
-		if err := term.Restore(int(os.Stdin.Fd()), old); err != nil {
 			return err
 		}
 		if quit {
@@ -60,6 +45,90 @@ func browse(root string, items []entry) error {
 		fmt.Printf("Playing %s\n", displayText(state.visible[playIndex].name))
 		if err := play(state.visible[playIndex]); err != nil {
 			return err
+		}
+	}
+}
+
+func browseSession(state *browserState) (int, bool, error) {
+	old, err := term.MakeRaw(int(os.Stdin.Fd()))
+	if err != nil {
+		return -1, false, err
+	}
+	jobs := newPreviews()
+	var image []byte
+	defer func() {
+		jobs.stop()
+		clear(image)
+		deletePreview(os.Stdout)
+		fmt.Print("\x1b[2J\x1b[H\x1b[?1049l\x1b[?25h")
+		term.Restore(int(os.Stdin.Fd()), old)
+		jobs.close()
+	}()
+	fmt.Print("\x1b[?1049h\x1b[?25l")
+	changes := make(chan os.Signal, 1)
+	signal.Notify(changes, syscall.SIGWINCH, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+	defer signal.Stop(changes)
+	type keyResult struct {
+		key string
+		err error
+	}
+	keys := make(chan keyResult, 1)
+	reader := bufio.NewReader(os.Stdin)
+	nextKey := func() { go func() { key, err := readKey(reader); keys <- keyResult{key, err} }() }
+	nextKey()
+	enabled := graphicsSupported()
+	_, ffmpegErr := exec.LookPath("ffmpeg")
+	previewPath, status := "", ""
+	for {
+		layout := terminalLayout(enabled)
+		path := ""
+		if layout.previewColumns > 0 && len(state.visible) > 0 {
+			path = state.visible[state.selected].path
+		}
+		if path != previewPath {
+			jobs.stop()
+			clear(image)
+			image = nil
+			previewPath, status = path, ""
+			if path != "" {
+				if ffmpegErr != nil {
+					status = "ffmpeg required"
+				} else {
+					status = "Loading…"
+					jobs.start(state.visible[state.selected])
+				}
+			}
+		}
+		draw(state.root, buildRows(state.root, state.visible), state.selected, state.query, state.searching, layout, image, status)
+		select {
+		case input := <-keys:
+			if input.err != nil {
+				return -1, false, input.err
+			}
+			if input.key == "p" && !state.searching && graphicsSupported() {
+				enabled = !enabled
+			} else {
+				playIndex, quit := state.handle(input.key)
+				if quit || playIndex >= 0 {
+					return playIndex, quit, nil
+				}
+			}
+			nextKey()
+		case result := <-jobs.results:
+			if result.generation != jobs.generation {
+				clear(result.data)
+				continue
+			}
+			clear(image)
+			image = result.data
+			status = ""
+			if result.err != nil {
+				status = "No preview."
+			}
+		case change := <-changes:
+			if change != syscall.SIGWINCH {
+				return -1, true, nil
+			}
 		}
 	}
 }
@@ -215,11 +284,44 @@ func buildRows(root string, items []entry) []row {
 	return rows
 }
 
-func draw(root string, rows []row, selected int, query string, searching bool) {
-	_, height, err := term.GetSize(int(os.Stdout.Fd()))
-	if err != nil || height < 6 {
-		height = 24
+type screenLayout struct{ width, height, textWidth, previewColumn, previewColumns, previewRows int }
+
+func terminalLayout(preview bool) screenLayout {
+	width, height, err := term.GetSize(int(os.Stdout.Fd()))
+	if err != nil || width < 8 || height < 6 {
+		width, height = 80, 24
 	}
+	return makeLayout(width, height, preview)
+}
+
+func makeLayout(width, height int, preview bool) screenLayout {
+	l := screenLayout{width: width, height: height, textWidth: width - 1}
+	if preview && width >= 96 && height >= 12 {
+		l.previewColumns = min(42, width/3)
+		l.textWidth = width - l.previewColumns - 3
+		l.previewColumn = l.textWidth + 3
+		l.previewRows = min(12, height-6)
+	}
+	return l
+}
+
+func wrapRows(rows []row, width int) []row {
+	var wrapped []row
+	for _, r := range rows {
+		for n, line := range strings.Split(ansi.Hardwrap(r.label, max(1, width-4), true), "\n") {
+			prefix := "  "
+			if n > 0 {
+				prefix = "    "
+			}
+			wrapped = append(wrapped, row{prefix + line, r.item})
+		}
+	}
+	return wrapped
+}
+
+func draw(root string, rows []row, selected int, query string, searching bool, layout screenLayout, image []byte, status string) {
+	rows = wrapRows(rows, layout.textWidth)
+	height := layout.height
 	selectedRow := 0
 	for i, r := range rows {
 		if r.item == selected {
@@ -241,28 +343,38 @@ func draw(root string, rows []row, selected int, query string, searching bool) {
 	if end > len(rows) {
 		end = len(rows)
 	}
+	deletePreview(os.Stdout)
 	fmt.Print("\x1b[2J\x1b[H")
-	fmt.Printf("\x1b[1m%s\x1b[0m\r\n", displayText(root))
-	fmt.Printf("Search: %s\r\n", displayText(query))
+	fmt.Printf("\x1b[1m%s\x1b[0m", ansi.Truncate(displayText(root), layout.width-1, "…"))
+	fmt.Printf("\x1b[2;1H%s", ansi.Truncate("Search: "+displayText(query), layout.width-1, "…"))
 	if len(rows) == 0 {
-		fmt.Print("\x1b[2mNo matches.\x1b[0m\r\n")
+		fmt.Print("\x1b[3;1H\x1b[2mNo matches.\x1b[0m")
 	}
-	for _, r := range rows[start:end] {
-		prefix := "  "
+	for n, r := range rows[start:end] {
+		fmt.Printf("\x1b[%d;1H", n+3)
+		label := r.label
 		if r.item == selected {
-			prefix = "\x1b[7m› "
+			marker := " "
+			if n == 0 || rows[start+n-1].item != r.item {
+				marker = "›"
+			}
+			label = "\x1b[7m" + marker + strings.TrimPrefix(ansi.Strip(label), " ")
 		}
-		fmt.Print(prefix, r.label)
-		if r.item == selected {
-			fmt.Print("\x1b[0m")
-		}
-		fmt.Print("\r\n")
+		fmt.Print(label, "\x1b[0m")
 	}
+	if layout.previewColumns > 0 {
+		fmt.Printf("\x1b[3;%dH\x1b[2mPreview\x1b[0m", layout.previewColumn)
+		if len(image) > 0 {
+			renderPreview(os.Stdout, image, layout.previewColumn, 4, layout.previewColumns, layout.previewRows)
+		} else {
+			fmt.Printf("\x1b[4;%dH\x1b[2m%s\x1b[0m", layout.previewColumn, status)
+		}
+	}
+	hint := "↑↓ select  enter play  / search  esc clear  p preview  q quit"
 	if searching {
-		fmt.Print("\x1b[2mtype to filter  enter done  esc clear\x1b[0m\r\n")
-	} else {
-		fmt.Print("\x1b[2m↑↓ select  enter play  / search  esc clear  q quit\x1b[0m\r\n")
+		hint = "type to filter  enter done  esc clear"
 	}
+	fmt.Printf("\x1b[%d;1H\x1b[2m%s\x1b[0m", height, ansi.Truncate(hint, layout.width-1, "…"))
 }
 
 func execIINA() (string, error) {
