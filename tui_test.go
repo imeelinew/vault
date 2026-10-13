@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"golang.org/x/text/unicode/norm"
 )
 
 func TestSearchNavigationAndPlaybackSelection(t *testing.T) {
@@ -87,5 +89,34 @@ func TestReadSearchKeys(t *testing.T) {
 		if err != nil || got != want {
 			t.Fatalf("read key = %q, %v; want %q", got, err, want)
 		}
+	}
+}
+
+func TestHangulDisplayAndSearchNormalization(t *testing.T) {
+	root := t.TempDir()
+	composedDir, composedName := "한글", "테스트 영상.mkv"
+	decomposedDir := norm.NFD.String(composedDir)
+	decomposedName := norm.NFD.String(composedName)
+	items := []entry{{path: filepath.Join(root, decomposedDir, ".vault-test.vlt"), name: decomposedName, locked: true}}
+	rows := buildRows(root, items)
+	if len(rows) != 2 || !strings.Contains(rows[0].label, composedDir) || !strings.Contains(rows[1].label, composedName) {
+		t.Fatal("Hangul display must use composed syllables")
+	}
+	if items[0].name != decomposedName || filepath.Base(filepath.Dir(items[0].path)) != decomposedDir {
+		t.Fatal("display normalization changed stored filename or path")
+	}
+	for _, query := range []string{composedDir, decomposedDir, "테스트", norm.NFD.String("테스트")} {
+		s := browserState{root: root, all: items, query: query}
+		s.filter()
+		if len(s.visible) != 1 || s.visible[0].path != items[0].path {
+			t.Fatalf("canonical search failed for %q", query)
+		}
+	}
+	s := browserState{root: root, all: items, visible: items, searching: true}
+	for _, r := range norm.NFD.String("테스트") {
+		s.handle(string(r))
+	}
+	if s.query != "테스트" || len(s.visible) != 1 {
+		t.Fatal("decomposed keyboard input did not compose")
 	}
 }

@@ -11,6 +11,7 @@ import (
 
 	"golang.org/x/sys/unix"
 	"golang.org/x/term"
+	"golang.org/x/text/unicode/norm"
 )
 
 type row struct {
@@ -56,7 +57,7 @@ func browse(root string, items []entry) error {
 		if quit {
 			return nil
 		}
-		fmt.Printf("Playing %s\n", state.visible[playIndex].name)
+		fmt.Printf("Playing %s\n", displayText(state.visible[playIndex].name))
 		if err := play(state.visible[playIndex]); err != nil {
 			return err
 		}
@@ -71,12 +72,16 @@ type browserState struct {
 	searching    bool
 }
 
+// macOS filenames can contain decomposed Hangul. Compose terminal text so
+// syllables use the terminal's Hangul font mapping; never rewrite file paths.
+func displayText(s string) string { return norm.NFC.String(s) }
+
 func (s *browserState) filter() {
 	s.visible = nil
-	query := strings.ToLower(s.query)
+	query := strings.ToLower(displayText(s.query))
 	for _, e := range s.all {
 		dir, _ := filepath.Rel(s.root, filepath.Dir(e.path))
-		if strings.Contains(strings.ToLower(filepath.Join(dir, e.name)), query) {
+		if strings.Contains(strings.ToLower(displayText(filepath.Join(dir, e.name))), query) {
 			s.visible = append(s.visible, e)
 		}
 	}
@@ -118,7 +123,7 @@ func (s *browserState) handle(key string) (playIndex int, quit bool) {
 			}
 		default:
 			if len([]rune(key)) == 1 && unicode.IsPrint([]rune(key)[0]) {
-				s.query += key
+				s.query = displayText(s.query + key)
 				s.filter()
 			}
 		}
@@ -190,7 +195,7 @@ func buildRows(root string, items []entry) []row {
 			for n := range parts {
 				dir := strings.Join(parts[:n+1], string(os.PathSeparator))
 				if !seen[dir] {
-					rows = append(rows, row{strings.Repeat("  ", n) + "\x1b[34m▸ " + parts[n] + "/\x1b[0m", -1})
+					rows = append(rows, row{strings.Repeat("  ", n) + "\x1b[34m▸ " + displayText(parts[n]) + "/\x1b[0m", -1})
 					seen[dir] = true
 				}
 			}
@@ -205,7 +210,7 @@ func buildRows(root string, items []entry) []row {
 			icon = "◆"
 			color = "\x1b[35m"
 		}
-		rows = append(rows, row{strings.Repeat("  ", depth) + color + icon + "\x1b[0m " + e.name, i})
+		rows = append(rows, row{strings.Repeat("  ", depth) + color + icon + "\x1b[0m " + displayText(e.name), i})
 	}
 	return rows
 }
@@ -237,8 +242,8 @@ func draw(root string, rows []row, selected int, query string, searching bool) {
 		end = len(rows)
 	}
 	fmt.Print("\x1b[2J\x1b[H")
-	fmt.Printf("\x1b[1m%s\x1b[0m\r\n", root)
-	fmt.Printf("Search: %s\r\n", query)
+	fmt.Printf("\x1b[1m%s\x1b[0m\r\n", displayText(root))
+	fmt.Printf("Search: %s\r\n", displayText(query))
 	if len(rows) == 0 {
 		fmt.Print("\x1b[2mNo matches.\x1b[0m\r\n")
 	}
