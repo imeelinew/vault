@@ -78,6 +78,7 @@ func browseSession(state *browserState) (int, bool, error) {
 	nextKey()
 	enabled := graphicsSupported()
 	_, ffmpegErr := exec.LookPath("ffmpeg")
+	_, ffprobeErr := exec.LookPath("ffprobe")
 	previewPath, status := "", ""
 	for {
 		layout := terminalLayout(enabled)
@@ -91,8 +92,8 @@ func browseSession(state *browserState) (int, bool, error) {
 			image = nil
 			previewPath, status = path, ""
 			if path != "" {
-				if ffmpegErr != nil {
-					status = "ffmpeg required"
+				if ffmpegErr != nil || ffprobeErr != nil {
+					status = "ffmpeg + ffprobe required"
 				} else {
 					status = "Loading…"
 					jobs.start(state.visible[state.selected])
@@ -284,7 +285,7 @@ func buildRows(root string, items []entry) []row {
 	return rows
 }
 
-type screenLayout struct{ width, height, textWidth, previewColumn, previewColumns, previewRows int }
+type screenLayout struct{ width, height, textWidth, previewColumn, previewColumns int }
 
 func terminalLayout(preview bool) screenLayout {
 	width, height, err := term.GetSize(int(os.Stdout.Fd()))
@@ -300,7 +301,6 @@ func makeLayout(width, height int, preview bool) screenLayout {
 		l.previewColumns = min(42, width/3)
 		l.textWidth = width - l.previewColumns - 3
 		l.previewColumn = l.textWidth + 3
-		l.previewRows = min(12, height-6)
 	}
 	return l
 }
@@ -365,7 +365,7 @@ func draw(root string, rows []row, selected int, query string, searching bool, l
 	if layout.previewColumns > 0 {
 		fmt.Printf("\x1b[3;%dH\x1b[2mPreview\x1b[0m", layout.previewColumn)
 		if len(image) > 0 {
-			renderPreview(os.Stdout, image, layout.previewColumn, 4, layout.previewColumns, layout.previewRows)
+			renderPreview(os.Stdout, image, layout.previewColumn, 4, layout.previewColumns)
 		} else {
 			fmt.Printf("\x1b[4;%dH\x1b[2m%s\x1b[0m", layout.previewColumn, status)
 		}

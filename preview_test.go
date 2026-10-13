@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"image/color"
 	"image/png"
 	"io"
 	"net/http"
@@ -60,7 +61,7 @@ func TestThumbnailEncryptedStreamAndCleanup(t *testing.T) {
 		t.Fatal("encrypted preview differs from plain preview")
 	}
 	config, err := png.DecodeConfig(bytes.NewReader(lockedImage))
-	if err != nil || config.Width > 480 || config.Height > 270 {
+	if err != nil || config.Width > 480 || config.Height > 960 {
 		t.Fatalf("bad preview size: %+v %v", config, err)
 	}
 	files, err := os.ReadDir(filepath.Dir(e.path))
@@ -109,10 +110,13 @@ func TestThumbnailEncryptedStreamAndCleanup(t *testing.T) {
 func TestKittyDirectChunksAndDeletion(t *testing.T) {
 	data := bytes.Repeat([]byte{1, 2, 3, 4}, 3000)
 	var output bytes.Buffer
-	renderPreview(&output, data, 70, 4, 30, 10)
+	renderPreview(&output, data, 70, 4, 30)
 	text := output.String()
 	if !strings.Contains(text, "a=T,t=d,f=100,") || strings.Contains(text, "t=f") {
 		t.Fatal("preview must use direct transfer")
+	}
+	if strings.Contains(text, ",r=") || !strings.Contains(text, ",c=30,") {
+		t.Fatal("preview must fix width and let the terminal preserve aspect ratio")
 	}
 	var encoded strings.Builder
 	for _, chunk := range strings.Split(text, "\x1b_G")[1:] {
@@ -163,5 +167,70 @@ func TestWrappedPreviewLayout(t *testing.T) {
 	}
 	if makeLayout(120, 30, false).previewColumns != 0 {
 		t.Fatal("disabled preview reserves space")
+	}
+}
+
+func TestMidpointThumbnailKeepsPortraitAndLandscapeAspect(t *testing.T) {
+	ffmpeg, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		t.Skip("ffmpeg unavailable")
+	}
+	for _, dimensions := range []struct {
+		name, size    string
+		width, height int
+	}{
+		{"landscape", "320x180", 320, 180},
+		{"portrait", "180x320", 180, 320},
+	} {
+		t.Run(dimensions.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "synthetic.mp4")
+			// Black opening, red middle, blue ending: a red thumbnail proves
+			// we seek into the middle rather than decoding the first frame.
+			cmd := exec.Command(ffmpeg, "-nostdin", "-loglevel", "error",
+				"-f", "lavfi", "-i", "color=black:s="+dimensions.size+":r=10:d=0.5",
+				"-f", "lavfi", "-i", "color=red:s="+dimensions.size+":r=10:d=1",
+				"-f", "lavfi", "-i", "color=blue:s="+dimensions.size+":r=10:d=0.5",
+				"-filter_complex", "[0:v][1:v][2:v]concat=n=3:v=1:a=0[v]", "-map", "[v]", "-c:v", "mpeg4", path)
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("fixture: %v %s", err, out)
+			}
+			items, err := scan(filepath.Dir(path))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := process(items, false); err != nil {
+				t.Fatal(err)
+			}
+			items, err = scan(filepath.Dir(path))
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+			defer cancel()
+			data, err := thumbnail(ctx, items[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer clear(data)
+			image, err := png.Decode(bytes.NewReader(data))
+			if err != nil {
+				t.Fatal(err)
+			}
+			bounds := image.Bounds()
+			w, h := bounds.Dx(), bounds.Dy()
+			// Allow one output pixel of scaler rounding.
+			errorPixels := w*dimensions.height - h*dimensions.width
+			if errorPixels < -dimensions.width || errorPixels > dimensions.width {
+				t.Fatalf("aspect changed: %dx%d", w, h)
+			}
+			pixel := color.NRGBAModel.Convert(image.At(w/2, h/2)).(color.NRGBA)
+			if pixel.R < 200 || pixel.G > 30 || pixel.B > 30 {
+				t.Fatalf("not the red midpoint: %+v", pixel)
+			}
+			files, err := os.ReadDir(filepath.Dir(path))
+			if err != nil || len(files) != 1 || !strings.HasSuffix(files[0].Name(), ".vlt") {
+				t.Fatal("preview left files on disk")
+			}
+		})
 	}
 }

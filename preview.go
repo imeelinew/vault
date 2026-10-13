@@ -4,12 +4,15 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"image/png"
 	"io"
+	"math"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -38,11 +41,15 @@ func thumbnail(ctx context.Context, e entry) ([]byte, error) {
 		return nil, err
 	}
 	defer closeStream()
+	midpoint, err := videoMidpoint(ctx, url)
+	if err != nil {
+		return nil, err
+	}
 	// No filenames, temp files, persistent cache, or decoder output logs.
 	cmd := exec.CommandContext(ctx, ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error",
-		"-threads", "1", "-protocol_whitelist", "http,tcp", "-rw_timeout", "5000000", "-i", url,
+		"-threads", "1", "-protocol_whitelist", "http,tcp", "-rw_timeout", "5000000", "-ss", strconv.FormatFloat(midpoint, 'f', 6, 64), "-i", url,
 		"-map", "0:v:0", "-an", "-sn", "-dn", "-frames:v", "1",
-		"-vf", "scale=480:270:force_original_aspect_ratio=decrease", "-threads", "1", "-f", "image2pipe", "-c:v", "png", "pipe:1")
+		"-vf", "scale=480:960:force_original_aspect_ratio=decrease:reset_sar=1", "-threads", "1", "-f", "image2pipe", "-c:v", "png", "pipe:1")
 	var output boundedImage
 	cmd.Stdout = &output
 	cmd.WaitDelay = time.Second
@@ -55,6 +62,45 @@ func thumbnail(ctx context.Context, e entry) ([]byte, error) {
 		return nil, err
 	}
 	return output.Bytes(), nil
+}
+
+func videoMidpoint(ctx context.Context, url string) (float64, error) {
+	ffprobe, err := exec.LookPath("ffprobe")
+	if err != nil {
+		return 0, errors.New("ffprobe required")
+	}
+	cmd := exec.CommandContext(ctx, ffprobe, "-v", "error", "-protocol_whitelist", "http,tcp", "-rw_timeout", "5000000",
+		"-select_streams", "v:0", "-show_entries", "format=duration:stream=duration", "-of", "json", url)
+	var output boundedImage
+	cmd.Stdout = &output
+	cmd.WaitDelay = time.Second
+	defer func() { clear(output.Bytes()) }()
+	if err := cmd.Run(); err != nil {
+		return 0, err
+	}
+	var probe struct {
+		Streams []struct {
+			Duration string `json:"duration"`
+		} `json:"streams"`
+		Format struct {
+			Duration string `json:"duration"`
+		} `json:"format"`
+	}
+	if err := json.Unmarshal(output.Bytes(), &probe); err != nil {
+		return 0, err
+	}
+	durations := []string{}
+	if len(probe.Streams) > 0 {
+		durations = append(durations, probe.Streams[0].Duration)
+	}
+	durations = append(durations, probe.Format.Duration)
+	for _, value := range durations {
+		duration, err := strconv.ParseFloat(value, 64)
+		if err == nil && duration > 0 && !math.IsNaN(duration) && !math.IsInf(duration, 0) {
+			return duration / 2, nil
+		}
+	}
+	return 0, errors.New("video duration unavailable")
 }
 
 type previewResult struct {
@@ -138,7 +184,7 @@ func graphicsSupported() bool {
 
 func deletePreview(w io.Writer) { fmt.Fprintf(w, "\x1b_Ga=d,d=I,i=%d,q=2\x1b\\", previewImageID) }
 
-func renderPreview(w io.Writer, data []byte, column, row, columns, rows int) {
+func renderPreview(w io.Writer, data []byte, column, row, columns int) {
 	if len(data) == 0 {
 		return
 	}
@@ -155,7 +201,9 @@ func renderPreview(w io.Writer, data []byte, column, row, columns, rows int) {
 			more = 1
 		}
 		if first {
-			fmt.Fprintf(w, "\x1b_Ga=T,t=d,f=100,i=%d,c=%d,r=%d,C=1,q=2,m=%d;", previewImageID, columns, rows, more)
+			// Specify width only: the terminal computes height from the PNG's
+			// actual aspect ratio, including portrait videos and resized cells.
+			fmt.Fprintf(w, "\x1b_Ga=T,t=d,f=100,i=%d,c=%d,C=1,z=-1,q=2,m=%d;", previewImageID, columns, more)
 			first = false
 		} else {
 			fmt.Fprintf(w, "\x1b_Gq=2,m=%d;", more)
