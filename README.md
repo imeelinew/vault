@@ -1,24 +1,28 @@
 # vault
 
-Fast, reversible video hiding for macOS, played through IINA. It is **not encryption** — the format uses a public fixed key and only prevents accidental discovery.
+**[English](README_EN.md)** · 中文
+
+macOS 视频隐藏工具：递归隐藏视频，经 IINA 播放。**不是加密** —— 使用公开固定密钥，仅防止偶然看到。
 
 ```sh
-v lock [directory]    # hide videos recursively
-v [directory]         # browse; arrows, Enter, q
-v unlock [directory]  # restore all videos
+v [目录]           # 浏览并播放
+v lock [目录]      # 隐藏全部视频
+v unlock [目录]    # 全部还原
 ```
 
-The default directory is the current directory. Supported: MP4, MKV, MOV, M4V, AVI, WebM, WMV, FLV, MPG, MPEG, TS, 3GP. `.DS_Store` is ignored; symlinks are rejected.
+目录默认为当前目录。
 
-The Bubble Tea browser uses a searchable, paginated video list with folder and size details. `/` filters by video or folder name, Enter confirms the filter and plays the selected video, Esc clears the filter, `?` shows shortcuts, and `p` toggles the preview panel. The list and preview panel adapt to the terminal width. Lock/unlock use a single Bubbles progress bar, including cache preparation. Ghostty and Kitty show a thumbnail when the window is at least 96 columns wide; previews are disabled inside tmux. `v lock` caches each video's midpoint frame with FFmpeg in a hidden `.vault-thumbnails` directory, so browsing never runs FFmpeg.
+依赖 IINA（含命令行工具）；ffmpeg/ffprobe 仅用于 `v lock` 生成缩略图。支持 mp4 mkv mov m4v avi webm wmv flv mpg mpeg ts 3gp；忽略 `.DS_Store`，拒绝符号链接与非视频文件。
 
-Vault files are hidden `.vault-*.vlt` files beside the originals. Playback serves decrypted byte ranges through a temporary loopback URL; no plaintext video is written to disk.
+隐藏结果为原文件旁的 `.vault-<hex>.vlt`。播放时经本地回环地址按字节范围解密，磁盘不留明文。
 
-## Recovery
+浏览界面：方向键移动，`/` 搜索（Enter 应用），`Esc` 清空，`Enter` 播放，`p` 预览，`?` 快捷键，`q` 退出。缩略图缓存于 `.vault-thumbnails`，仅 Ghostty/Kitty 且宽度 ≥96 列显示，tmux 内禁用。
 
-If `v` is lost, reinstall it and run `v unlock /path/to/videos`. Format: `VAULTV1\n` (8 bytes), AES-CTR IV (16), big-endian plaintext size (8), big-endian encrypted filename length (2), SHA-256 plaintext digest (32), encrypted UTF-8 filename, then encrypted video. The AES-256 key is `SHA-256("vault-v1-reversible-video-obfuscation")`; filename AES-CTR uses the same IV with its first byte XORed with `0x80`.
+## 恢复
 
-## Build
+`v` 丢失时重新编译，运行 `v unlock 目录`。格式：`VAULTV1\n`(8) + AES-CTR IV(16) + 大端明文长度(8) + 大端文件名密文长度(2) + SHA-256 明文摘要(32) + 加密文件名 + 加密视频。密钥为 `SHA-256("vault-v1-reversible-video-obfuscation")`；文件名使用同一 IV 且首字节异或 `0x80`。
+
+## 构建
 
 ```sh
 go build -o v .
