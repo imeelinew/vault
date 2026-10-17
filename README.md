@@ -10,7 +10,7 @@ v unlock [directory]  # restore all videos
 
 The default directory is the current directory. Supported: MP4, MKV, MOV, M4V, AVI, WebM, WMV, FLV, MPG, MPEG, TS, 3GP. `.DS_Store` is ignored; symlinks are rejected.
 
-In the browser, `/` filters by name, Esc clears it, and `p` toggles previews. Ghostty and Kitty show a thumbnail when the window is at least 96 columns wide; previews are disabled inside tmux. `v lock` caches each video's midpoint frame with FFmpeg in a hidden `.vault-thumbnails` directory, so browsing never runs FFmpeg.
+The Bubble Tea browser uses a searchable, paginated video list with folder and size details. `/` filters by video or folder name, Enter confirms the filter and plays the selected video, Esc clears the filter, `?` shows shortcuts, and `p` toggles the preview panel. The list and preview panel adapt to the terminal width. Lock/unlock use a single Bubbles progress bar, including cache preparation. Ghostty and Kitty show a thumbnail when the window is at least 96 columns wide; previews are disabled inside tmux. `v lock` caches each video's midpoint frame with FFmpeg in a hidden `.vault-thumbnails` directory, so browsing never runs FFmpeg.
 
 Vault files are hidden `.vault-*.vlt` files beside the originals. Playback serves decrypted byte ranges through a temporary loopback URL; no plaintext video is written to disk.
 
