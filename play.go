@@ -137,10 +137,6 @@ func streamVideo(e entry) (string, func(), error) {
 	return url, func() { server.Close(); f.Close() }, nil
 }
 
-func videoHandler(f *os.File, h header, path string) http.Handler {
-	return contentHandler(f, h, path, true)
-}
-
 func contentHandler(f *os.File, h header, path string, locked bool) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		if req.URL.Path != path || req.Method != http.MethodGet && req.Method != http.MethodHead {

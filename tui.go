@@ -54,15 +54,12 @@ func browseSession(state *browserState) (int, bool, error) {
 	if err != nil {
 		return -1, false, err
 	}
-	jobs := newPreviews()
 	var image []byte
 	defer func() {
-		jobs.stop()
 		clear(image)
 		deletePreview(os.Stdout)
 		fmt.Print("\x1b[2J\x1b[H\x1b[?1049l\x1b[?25h")
 		term.Restore(int(os.Stdin.Fd()), old)
-		jobs.close()
 	}()
 	fmt.Print("\x1b[?1049h\x1b[?25l")
 	changes := make(chan os.Signal, 1)
@@ -77,8 +74,6 @@ func browseSession(state *browserState) (int, bool, error) {
 	nextKey := func() { go func() { key, err := readKey(reader); keys <- keyResult{key, err} }() }
 	nextKey()
 	enabled := graphicsSupported()
-	_, ffmpegErr := exec.LookPath("ffmpeg")
-	_, ffprobeErr := exec.LookPath("ffprobe")
 	previewPath, status := "", ""
 	for {
 		layout := terminalLayout(enabled)
@@ -87,16 +82,13 @@ func browseSession(state *browserState) (int, bool, error) {
 			path = state.visible[state.selected].path
 		}
 		if path != previewPath {
-			jobs.stop()
 			clear(image)
 			image = nil
 			previewPath, status = path, ""
 			if path != "" {
-				if ffmpegErr != nil || ffprobeErr != nil {
-					status = "ffmpeg + ffprobe required"
-				} else {
-					status = "Loading…"
-					jobs.start(state.visible[state.selected])
+				image, err = readThumbnailCache(state.visible[state.selected])
+				if err != nil {
+					status = "Run v lock to cache preview."
 				}
 			}
 		}
@@ -115,17 +107,6 @@ func browseSession(state *browserState) (int, bool, error) {
 				}
 			}
 			nextKey()
-		case result := <-jobs.results:
-			if result.generation != jobs.generation {
-				clear(result.data)
-				continue
-			}
-			clear(image)
-			image = result.data
-			status = ""
-			if result.err != nil {
-				status = "No preview."
-			}
 		case change := <-changes:
 			if change != syscall.SIGWINCH {
 				return -1, true, nil

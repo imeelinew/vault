@@ -82,10 +82,15 @@ func run(args []string) error {
 	}
 	switch command {
 	case "lock":
-		return process(items, false)
+		processErr := process(items, false)
+		return errors.Join(processErr, maintainThumbnailCache(root, true))
 	case "unlock":
-		return process(items, true)
+		processErr := process(items, true)
+		return errors.Join(processErr, maintainThumbnailCache(root, false))
 	default:
+		if err := maintainThumbnailCache(root, false); err != nil {
+			return err
+		}
 		return browse(root, items)
 	}
 }
@@ -107,6 +112,9 @@ func scan(root string) ([]entry, error) {
 			return fmt.Errorf("symlink unsupported: %s", path)
 		}
 		if d.IsDir() {
+			if d.Name() == thumbnailCacheDir {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 		if !d.Type().IsRegular() {
@@ -382,6 +390,10 @@ func lockOne(e entry, p *progress) error {
 }
 
 func unlockOne(e entry, p *progress) error {
+	cachePath, cacheErr := thumbnailCachePath(e)
+	if cacheErr != nil {
+		return cacheErr
+	}
 	in, err := os.Open(e.path)
 	if err != nil {
 		return err
@@ -446,6 +458,12 @@ func unlockOne(e entry, p *progress) error {
 	if err = os.Remove(e.path); err != nil {
 		return fmt.Errorf("restored copy at %s; encrypted file remains: %w", final, err)
 	}
+	if err := os.Remove(cachePath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("video restored; remove thumbnail cache: %w", err)
+	}
+	// A nonempty directory belongs to other locked videos. The command's
+	// reconciliation handles orphaned entries once processing finishes.
+	_ = os.Remove(filepath.Dir(cachePath))
 	return nil
 }
 

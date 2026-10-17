@@ -45,7 +45,7 @@ func thumbnail(ctx context.Context, e entry) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	// No filenames, temp files, persistent cache, or decoder output logs.
+	// Decode only during lock's cache preparation, through a loopback stream.
 	cmd := exec.CommandContext(ctx, ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error",
 		"-threads", "1", "-protocol_whitelist", "http,tcp", "-rw_timeout", "5000000", "-ss", strconv.FormatFloat(midpoint, 'f', 6, 64), "-i", url,
 		"-map", "0:v:0", "-an", "-sn", "-dn", "-frames:v", "1",
@@ -101,78 +101,6 @@ func videoMidpoint(ctx context.Context, url string) (float64, error) {
 		}
 	}
 	return 0, errors.New("video duration unavailable")
-}
-
-type previewResult struct {
-	generation int
-	data       []byte
-	err        error
-}
-type previews struct {
-	results    chan previewResult
-	cancel     context.CancelFunc
-	done       <-chan struct{}
-	generation int
-}
-
-func newPreviews() *previews { return &previews{results: make(chan previewResult, 1)} }
-
-func (p *previews) stop() {
-	if p.cancel != nil {
-		p.cancel()
-		p.cancel = nil
-	}
-	p.generation++
-}
-
-func (p *previews) start(e entry) {
-	p.stop()
-	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
-	p.cancel = cancel
-	previous := p.done
-	done := make(chan struct{})
-	p.done = done
-	generation := p.generation
-	go func() {
-		defer close(done)
-		defer cancel()
-		// Serialize decoders, including cancellation, and debounce navigation.
-		if previous != nil {
-			<-previous
-		}
-		timer := time.NewTimer(180 * time.Millisecond)
-		defer timer.Stop()
-		select {
-		case <-ctx.Done():
-			return
-		case <-timer.C:
-		}
-		data, err := thumbnail(ctx, e)
-		if ctx.Err() != nil {
-			clear(data)
-			return
-		}
-		select {
-		case p.results <- previewResult{generation, data, err}:
-		case <-ctx.Done():
-			clear(data)
-		}
-	}()
-}
-
-func (p *previews) close() {
-	p.stop()
-	if p.done != nil {
-		<-p.done
-	}
-	for {
-		select {
-		case result := <-p.results:
-			clear(result.data)
-		default:
-			return
-		}
-	}
 }
 
 func graphicsSupported() bool {
