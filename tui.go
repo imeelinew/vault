@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"unicode"
@@ -58,10 +59,10 @@ func browseSession(state *browserState) (int, bool, error) {
 	defer func() {
 		clear(image)
 		deletePreview(os.Stdout)
-		fmt.Print("\x1b[2J\x1b[H\x1b[?1049l\x1b[?25h")
+		fmt.Print("\x1b[?1000l\x1b[?1006l\x1b[2J\x1b[H\x1b[?1049l\x1b[?25h")
 		term.Restore(int(os.Stdin.Fd()), old)
 	}()
-	fmt.Print("\x1b[?1049h\x1b[?25l")
+	fmt.Print("\x1b[?1049h\x1b[?25l\x1b[?1000h\x1b[?1006h")
 	changes := make(chan os.Signal, 1)
 	signal.Notify(changes, syscall.SIGWINCH, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 	defer signal.Stop(changes)
@@ -226,6 +227,34 @@ func readKey(reader *bufio.Reader) (string, error) {
 	b, err := reader.ReadByte()
 	if err != nil {
 		return "", err
+	}
+	if prefix[0] == '[' && b == '<' {
+		var payload strings.Builder
+		for payload.Len() < 64 {
+			if !ready() {
+				return "", nil
+			}
+			b, err = reader.ReadByte()
+			if err != nil {
+				return "", err
+			}
+			if b == 'M' || b == 'm' {
+				button, _, found := strings.Cut(payload.String(), ";")
+				code, err := strconv.Atoi(button)
+				if b == 'M' && found && err == nil && code&0xc0 == 64 {
+					// Reverse scrolling only; arrow keys keep their direction.
+					switch code & 3 {
+					case 0:
+						return "down", nil
+					case 1:
+						return "up", nil
+					}
+				}
+				return "", nil
+			}
+			payload.WriteByte(b)
+		}
+		return "", nil
 	}
 	switch b {
 	case 'A':
