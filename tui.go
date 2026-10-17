@@ -58,6 +58,8 @@ func videoSize(n int64) string {
 
 type previewPaintMsg int
 
+const scrollInterval = 80 * time.Millisecond
+
 type browser struct {
 	root                        string
 	list                        list.Model
@@ -67,6 +69,8 @@ type browser struct {
 	previewPath, previewStatus  string
 	generation                  int
 	chosen                      *entry
+	lastScroll                  time.Time
+	scrollDirection             int
 }
 
 func newBrowser(root string, items []entry) *browser {
@@ -173,10 +177,20 @@ func (m *browser) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.list, cmd = m.list.Update(msg)
 	case tea.MouseWheelMsg:
 		// Preserve the user's chosen trackpad direction independently of keys.
+		direction := 0
 		switch msg.Button {
 		case tea.MouseWheelUp:
-			m.list.CursorDown()
+			direction = 1
 		case tea.MouseWheelDown:
+			direction = -1
+		}
+		if direction == 0 || direction == m.scrollDirection && time.Since(m.lastScroll) < scrollInterval {
+			return m, nil
+		}
+		m.lastScroll, m.scrollDirection = time.Now(), direction
+		if direction > 0 {
+			m.list.CursorDown()
+		} else {
 			m.list.CursorUp()
 		}
 	default:
