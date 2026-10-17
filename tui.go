@@ -84,7 +84,6 @@ func newBrowser(root string, items []entry) *browser {
 	d.Styles.SelectedDesc = d.Styles.SelectedDesc.BorderForeground(accent).Foreground(lipgloss.Color("#A5B4C8"))
 	l := list.New(videos, d, 76, 20)
 	l.Title = "Videos"
-	l.InfiniteScrolling = true
 	l.SetStatusBarItemName("video", "videos")
 	l.KeyMap.Quit = key.NewBinding(key.WithKeys("q"), key.WithHelp("q", "quit"))
 	l.KeyMap.AcceptWhileFiltering = key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "apply"))
