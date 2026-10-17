@@ -15,7 +15,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"time"
 )
 
 const magic = "VAULTV1\n"
@@ -81,14 +80,21 @@ func run(args []string) error {
 		return err
 	}
 	switch command {
-	case "lock":
-		processErr := process(items, false)
-		return errors.Join(processErr, maintainThumbnailCache(root, true))
-	case "unlock":
-		processErr := process(items, true)
-		return errors.Join(processErr, maintainThumbnailCache(root, false))
+	case "lock", "unlock":
+		unlock := command == "unlock"
+		count := 0
+		for _, e := range items {
+			if !unlock || e.locked {
+				count++
+			}
+		}
+		p := newProgress(count, unlock)
+		processErr := process(items, unlock, p)
+		err := errors.Join(processErr, maintainThumbnailCache(root, !unlock, p))
+		p.finish(err)
+		return err
 	default:
-		if err := maintainThumbnailCache(root, false); err != nil {
+		if err := maintainThumbnailCache(root, false, nil); err != nil {
 			return err
 		}
 		return browse(root, items)
@@ -221,24 +227,15 @@ func writeHeader(w io.Writer, h header) error {
 	return err
 }
 
-func process(items []entry, unlock bool) error {
-	var selected []entry
-	var total int64
+func process(items []entry, unlock bool, p *progress) error {
 	for _, e := range items {
-		if e.locked == unlock {
-			selected = append(selected, e)
-			total += e.size
+		if e.locked != unlock {
+			if !unlock {
+				p.advance(0.8)
+			}
+			continue
 		}
-	}
-	if len(selected) == 0 {
-		fmt.Println("No videos to process.")
-		return nil
-	}
-	p := &progress{verb: "Locking", total: total, start: time.Now()}
-	if unlock {
-		p.verb = "Unlocking"
-	}
-	for _, e := range selected {
+		p.fileSize = e.size
 		var err error
 		if unlock {
 			err = unlockOne(e, p)
@@ -246,44 +243,16 @@ func process(items []entry, unlock bool) error {
 			err = lockOne(e, p)
 		}
 		if err != nil {
-			fmt.Fprintln(os.Stderr)
 			return fmt.Errorf("%s: %w", e.path, err)
 		}
+		if e.size == 0 {
+			p.advance(p.weight)
+		}
+		if unlock {
+			p.completed++
+		}
 	}
-	p.finish(len(selected))
 	return nil
-}
-
-type progress struct {
-	verb        string
-	total, done int64
-	start, last time.Time
-}
-
-func (p *progress) add(n int) {
-	p.done += int64(n)
-	if time.Since(p.last) < 100*time.Millisecond && p.done != p.total {
-		return
-	}
-	p.last = time.Now()
-	percent := 100.0
-	if p.total > 0 {
-		percent = 100 * float64(p.done) / float64(p.total)
-	}
-	fmt.Fprintf(os.Stderr, "\r%s %.0f%%  %s/%s", p.verb, percent, human(p.done), human(p.total))
-}
-func (p *progress) finish(n int) { p.add(0); fmt.Fprintf(os.Stderr, "\n%d videos.\n", n) }
-func human(n int64) string {
-	if n < 1024 {
-		return fmt.Sprintf("%d B", n)
-	}
-	if n < 1<<20 {
-		return fmt.Sprintf("%.1f KiB", float64(n)/1024)
-	}
-	if n < 1<<30 {
-		return fmt.Sprintf("%.1f MiB", float64(n)/(1<<20))
-	}
-	return fmt.Sprintf("%.1f GiB", float64(n)/(1<<30))
 }
 
 func tempFile(dir string) (*os.File, error) { return os.CreateTemp(dir, ".vault-tmp-*") }

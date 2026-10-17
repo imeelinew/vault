@@ -143,7 +143,7 @@ func writeThumbnailCache(e entry) error {
 
 // Reconcile by identity, never by the ordering of directory entries. Only
 // lock generates images; browsing and unlock remove orphaned cache data.
-func maintainThumbnailCache(root string, generate bool) error {
+func maintainThumbnailCache(root string, generate bool, p *progress) error {
 	items, err := scan(root)
 	if err != nil {
 		return err
@@ -200,13 +200,14 @@ func maintainThumbnailCache(root string, generate bool) error {
 		}
 		data, err := readThumbnailCache(e)
 		clear(data)
-		if err == nil {
-			continue
+		if err != nil {
+			if err := writeThumbnailCache(e); err != nil {
+				failures = append(failures, fmt.Errorf("thumbnail %s: %w", e.path, err))
+				continue
+			}
 		}
-		fmt.Fprintf(os.Stderr, "Caching preview: %s\n", displayText(e.name))
-		if err := writeThumbnailCache(e); err != nil {
-			failures = append(failures, fmt.Errorf("thumbnail %s: %w", e.path, err))
-		}
+		p.completed++
+		p.advance(0.2)
 	}
 	return errors.Join(failures...)
 }
