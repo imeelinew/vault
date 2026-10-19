@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"image/color"
 	"image/png"
 	"os"
 	"os/exec"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"charm.land/bubbles/v2/help"
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
@@ -21,9 +23,6 @@ import (
 )
 
 var (
-	accent     = lipgloss.Color("#5EEAD4")
-	muted      = lipgloss.NewStyle().Foreground(lipgloss.Color("#8892A6"))
-	panel      = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("#3B4558"))
 	playKey    = key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "play"))
 	previewKey = key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "preview"))
 )
@@ -71,6 +70,8 @@ type browser struct {
 	chosen                      *entry
 	lastScroll                  time.Time
 	scrollDirection             int
+	accent                      color.Color
+	text, muted, panel          lipgloss.Style
 }
 
 func newBrowser(root string, items []entry) *browser {
@@ -84,14 +85,11 @@ func newBrowser(root string, items []entry) *browser {
 	})
 	d := list.NewDefaultDelegate()
 	d.SetSpacing(1)
-	d.Styles.SelectedTitle = d.Styles.SelectedTitle.BorderForeground(accent).Foreground(accent).Bold(true)
-	d.Styles.SelectedDesc = d.Styles.SelectedDesc.BorderForeground(accent).Foreground(lipgloss.Color("#A5B4C8"))
 	l := list.New(videos, d, 76, 20)
 	l.Title = "Videos"
 	l.SetStatusBarItemName("video", "videos")
 	l.KeyMap.Quit = key.NewBinding(key.WithKeys("q"), key.WithHelp("q", "quit"))
 	l.KeyMap.AcceptWhileFiltering = key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "apply"))
-	l.Styles.Title = lipgloss.NewStyle().Foreground(lipgloss.Color("#0F172A")).Background(accent).Bold(true).Padding(0, 1)
 	l.FilterInput.Prompt = "Search  "
 	l.FilterInput.Placeholder = "Video or folder name"
 	l.AdditionalShortHelpKeys = func() []key.Binding { return []key.Binding{playKey, previewKey} }
@@ -109,8 +107,51 @@ func newBrowser(root string, items []entry) *browser {
 		return ranks
 	}
 	m := &browser{root: root, list: l, preview: graphicsSupported()}
+	m.applyTheme(true)
 	m.resize(80, 24)
 	return m
+}
+
+func (m *browser) applyTheme(dark bool) {
+	pick := lipgloss.LightDark(dark)
+	m.accent = pick(lipgloss.Color("#0F766E"), lipgloss.Color("#5EEAD4"))
+	m.text = lipgloss.NewStyle().Foreground(pick(lipgloss.Color("#1F2937"), lipgloss.Color("#DDDDDD")))
+	m.muted = lipgloss.NewStyle().Foreground(pick(lipgloss.Color("#526174"), lipgloss.Color("#8892A6")))
+	m.panel = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(pick(lipgloss.Color("#64748B"), lipgloss.Color("#3B4558")))
+
+	d := list.NewDefaultDelegate()
+	d.SetSpacing(1)
+	d.Styles = list.NewDefaultItemStyles(dark)
+	d.Styles.SelectedTitle = d.Styles.SelectedTitle.BorderForeground(m.accent).Foreground(m.accent).Bold(true)
+	d.Styles.SelectedDesc = d.Styles.SelectedDesc.BorderForeground(m.accent).Foreground(pick(lipgloss.Color("#334155"), lipgloss.Color("#A5B4C8")))
+	if !dark {
+		d.Styles.NormalDesc = d.Styles.NormalDesc.Foreground(m.muted.GetForeground())
+		d.Styles.DimmedTitle = d.Styles.DimmedTitle.Foreground(m.muted.GetForeground())
+		d.Styles.DimmedDesc = d.Styles.DimmedDesc.Foreground(m.muted.GetForeground())
+	}
+	m.list.SetDelegate(d)
+	m.list.Styles = list.DefaultStyles(dark)
+	m.list.Styles.Title = lipgloss.NewStyle().Foreground(pick(lipgloss.Color("#FFFFFF"), lipgloss.Color("#0F172A"))).Background(m.accent).Bold(true).Padding(0, 1)
+	m.list.Help.Styles = help.DefaultStyles(dark)
+	if !dark {
+		m.list.Styles.StatusBar = m.list.Styles.StatusBar.Foreground(m.muted.GetForeground())
+		m.list.Styles.StatusEmpty = m.muted
+		m.list.Styles.NoItems = m.muted
+		m.list.Styles.StatusBarFilterCount = m.muted
+		m.list.Styles.StatusBarActiveFilter = m.text
+		m.list.Help.Styles.ShortKey, m.list.Help.Styles.FullKey = m.text, m.text
+		m.list.Help.Styles.ShortDesc, m.list.Help.Styles.FullDesc = m.muted, m.muted
+		m.list.Help.Styles.ShortSeparator, m.list.Help.Styles.FullSeparator = m.muted, m.muted
+		m.list.Help.Styles.Ellipsis = m.muted
+	}
+	m.list.Paginator.ActiveDot = m.list.Styles.ActivePaginationDot.String()
+	m.list.Paginator.InactiveDot = m.list.Styles.InactivePaginationDot.String()
+	input := m.list.Styles.Filter
+	input.Focused.Text, input.Blurred.Text = m.text, m.text
+	input.Focused.Prompt = lipgloss.NewStyle().Foreground(m.accent)
+	input.Blurred.Prompt = input.Focused.Prompt
+	input.Cursor.Color = m.accent
+	m.list.FilterInput.SetStyles(input)
 }
 
 func (m *browser) resize(width, height int) {
@@ -126,7 +167,9 @@ func (m *browser) resize(width, height int) {
 	m.list.SetSize(max(8, listWidth), max(6, height-4))
 }
 
-func (m *browser) Init() tea.Cmd { return m.refreshPreview(true) }
+func (m *browser) Init() tea.Cmd {
+	return tea.Batch(tea.RequestBackgroundColor, m.refreshPreview(true))
+}
 
 func (m *browser) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if paint, ok := msg.(previewPaintMsg); ok {
@@ -153,6 +196,9 @@ func (m *browser) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	forcePreview := false
 	switch msg := msg.(type) {
+	case tea.BackgroundColorMsg:
+		m.applyTheme(msg.IsDark())
+		forcePreview = true
 	case tea.WindowSizeMsg:
 		m.resize(msg.Width, msg.Height)
 		forcePreview = true
@@ -232,23 +278,23 @@ func (m *browser) refreshPreview(force bool) tea.Cmd {
 }
 
 func (m *browser) View() tea.View {
-	header := lipgloss.NewStyle().Foreground(accent).Bold(true).Render("VAULT") + "  " + muted.Render(ansi.Truncate(displayText(m.root), max(1, m.width-13), "…"))
+	header := lipgloss.NewStyle().Foreground(m.accent).Bold(true).Render("VAULT") + "  " + m.muted.Render(ansi.Truncate(displayText(m.root), max(1, m.width-13), "…"))
 	body := lipgloss.NewStyle().Width(m.list.Width()).Render(m.list.View())
 	if m.previewWidth > 0 {
-		content := lipgloss.NewStyle().Foreground(accent).Bold(true).Render("PREVIEW")
+		content := lipgloss.NewStyle().Foreground(m.accent).Bold(true).Render("PREVIEW")
 		if item, ok := m.list.SelectedItem().(videoItem); ok {
 			content += "\n\n" + lipgloss.NewStyle().Width(m.previewWidth-4).Height(2).MaxHeight(2).Bold(true).Render(item.Title())
-			content += "\n" + muted.Render(videoSize(item.size))
+			content += "\n" + m.muted.Render(videoSize(item.size))
 			if m.previewStatus != "" {
-				content += "\n\n" + muted.Render(m.previewStatus)
+				content += "\n\n" + m.muted.Render(m.previewStatus)
 			}
 		} else {
-			content += "\n\n" + muted.Render("No video selected")
+			content += "\n\n" + m.muted.Render("No video selected")
 		}
-		right := panel.Width(m.previewWidth).Height(max(1, m.height-4)).Padding(0, 1).Render(content)
+		right := m.panel.Width(m.previewWidth).Height(max(1, m.height-4)).Padding(0, 1).Render(content)
 		body = lipgloss.JoinHorizontal(lipgloss.Top, body, " ", right)
 	}
-	v := tea.NewView(lipgloss.NewStyle().Margin(1, 2).Render(header + "\n\n" + body))
+	v := tea.NewView(m.text.Margin(1, 2).Render(header + "\n\n" + body))
 	v.AltScreen = true
 	v.MouseMode = tea.MouseModeCellMotion
 	return v
