@@ -53,6 +53,10 @@ func main() {
 }
 
 func run(args []string) error {
+	return runWithAuthentication(args, authenticate)
+}
+
+func runWithAuthentication(args []string, auth func() error) error {
 	command, root := "browse", "."
 	if len(args) > 0 {
 		switch args[0] {
@@ -69,6 +73,9 @@ func run(args []string) error {
 	}
 	if len(args) == 1 {
 		root = args[0]
+	}
+	if err := auth(); err != nil {
+		return fmt.Errorf("Touch ID: %w", err)
 	}
 	var err error
 	root, err = filepath.Abs(root)

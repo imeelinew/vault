@@ -12,6 +12,8 @@ v unlock [directory]   # restore all videos
 
 Directory defaults to the current one.
 
+Browsing, locking, and restoring require Touch ID before the directory is scanned; cancel, failure, timeout, or unavailable biometrics exits. No password fallback; `v --help` is exempt. An access gate only — the file format is unchanged.
+
 Requires IINA (with its command-line tool); ffmpeg/ffprobe are used only by `v lock` to build thumbnails. Supports mp4 mkv mov m4v avi webm wmv flv mpg mpeg ts 3gp; `.DS_Store` is ignored, symlinks and non-video files are rejected.
 
 Locked files are hidden `.vault-<hex>.vlt` files beside the originals. Playback decrypts byte ranges over a loopback URL; no plaintext reaches disk.
@@ -25,5 +27,7 @@ If `v` is lost, rebuild it and run `v unlock directory`. Format: `VAULTV1\n` (8)
 ## Build
 
 ```sh
-go build -o v .
+CGO_ENABLED=1 go build -o v .
 ```
+
+Requires macOS and Xcode Command Line Tools (links LocalAuthentication).
