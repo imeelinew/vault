@@ -107,7 +107,11 @@ func graphicsSupported() bool {
 	if os.Getenv("TMUX") != "" {
 		return false
 	}
-	return os.Getenv("TERM_PROGRAM") == "ghostty" || strings.Contains(os.Getenv("TERM"), "ghostty") || os.Getenv("KITTY_WINDOW_ID") != ""
+	switch os.Getenv("TERM_PROGRAM") {
+	case "ghostty", "rex":
+		return true
+	}
+	return strings.Contains(os.Getenv("TERM"), "ghostty") || os.Getenv("TERM") == "xterm-rex" || os.Getenv("KITTY_WINDOW_ID") != ""
 }
 
 func deletePreview(w io.Writer) { fmt.Fprintf(w, "\x1b_Ga=d,d=I,i=%d,q=2\x1b\\", previewImageID) }
