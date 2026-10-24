@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"charm.land/bubbles/v2/list"
+	"charm.land/lipgloss/v2"
 )
 
 // Render the viewport as a single block in a copy of the list. The live list
@@ -56,11 +57,21 @@ func (m *browser) libraryView() string {
 	}
 	var content strings.Builder
 	end := min(len(items), m.viewportOffset+m.viewportCapacity())
+	delegate := m.delegate
+	delegate.Styles.SelectedTitle = delegate.Styles.SelectedTitle.Width(m.list.Width())
+	delegate.Styles.SelectedDesc = delegate.Styles.SelectedDesc.Width(m.list.Width())
 	for index := m.viewportOffset; index < end; index++ {
 		if index > m.viewportOffset {
-			content.WriteString(strings.Repeat("\n", m.delegate.Spacing()+1))
+			content.WriteByte('\n')
 		}
-		m.delegate.Render(&content, m.list, index, items[index])
+		var item strings.Builder
+		delegate.Render(&item, m.list, index, items[index])
+		block := lipgloss.NewStyle()
+		if index == m.list.Index() && !m.list.SettingFilter() {
+			block = m.selection.Width(m.list.Width())
+		}
+		// Include the item's clickable spacing in its selection background.
+		content.WriteString(block.Height(delegate.Height() + delegate.Spacing()).Render(item.String()))
 	}
 	view := m.viewportList(content.String())
 	return view.View()

@@ -72,6 +72,7 @@ type browser struct {
 	lastClickIndex              int
 	accent                      color.Color
 	text, muted, panel          lipgloss.Style
+	selection                   lipgloss.Style
 }
 
 func newBrowser(root string, items []entry) *browser {
@@ -123,8 +124,9 @@ func (m *browser) applyTheme(dark bool) {
 	d := list.NewDefaultDelegate()
 	d.SetSpacing(1)
 	d.Styles = list.NewDefaultItemStyles(dark)
-	d.Styles.SelectedTitle = d.Styles.SelectedTitle.BorderForeground(m.accent).Foreground(m.accent).Bold(true)
-	d.Styles.SelectedDesc = d.Styles.SelectedDesc.BorderForeground(m.accent).Foreground(pick(lipgloss.Color("#334155"), lipgloss.Color("#A5B4C8")))
+	m.selection = lipgloss.NewStyle().Background(pick(lipgloss.Color("#CCFBF1"), lipgloss.Color("#134E4A")))
+	d.Styles.SelectedTitle = m.selection.Foreground(pick(lipgloss.Color("#134E4A"), lipgloss.Color("#F0FDFA"))).Bold(true).PaddingLeft(2)
+	d.Styles.SelectedDesc = m.selection.Foreground(pick(lipgloss.Color("#115E59"), lipgloss.Color("#CCFBF1"))).PaddingLeft(2)
 	if !dark {
 		d.Styles.NormalDesc = d.Styles.NormalDesc.Foreground(m.muted.GetForeground())
 		d.Styles.DimmedTitle = d.Styles.DimmedTitle.Foreground(m.muted.GetForeground())
