@@ -18,7 +18,7 @@ Requires IINA (with its command-line tool); ffmpeg/ffprobe are used only by `v l
 
 Locked files are hidden `.vault-<hex>.vlt` files beside the originals. Playback decrypts byte ranges over a loopback URL; no plaintext reaches disk.
 
-Browser: arrows to move, `/` to search (Enter applies), `Esc` to clear, `Enter` to play, `p` to preview, `?` for shortcuts, `q` to quit. Thumbnails are cached in `.vault-thumbnails` and shown only in Ghostty/Kitty/Rex at ≥96 columns and ≥16 rows, never inside tmux.
+Browser: arrows to move; trackpad/wheel scrolls the viewport without changing selection; click to select, double-click to play. `/` to search (Enter applies), `Esc` to clear, `Enter` to play, `p` to preview, `?` for shortcuts, `q` to quit. Thumbnails are cached in `.vault-thumbnails` and shown only in Ghostty/Kitty/Rex at ≥96 columns and ≥16 rows, never inside tmux.
 
 ## Recovery
 

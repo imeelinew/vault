@@ -57,8 +57,6 @@ func videoSize(n int64) string {
 
 type previewPaintMsg int
 
-const scrollInterval = 80 * time.Millisecond
-
 type browser struct {
 	root                        string
 	list                        list.Model
@@ -68,8 +66,10 @@ type browser struct {
 	previewPath, previewStatus  string
 	generation                  int
 	chosen                      *entry
-	lastScroll                  time.Time
-	scrollDirection             int
+	delegate                    list.DefaultDelegate
+	viewportOffset              int
+	lastClick                   time.Time
+	lastClickIndex              int
 	accent                      color.Color
 	text, muted, panel          lipgloss.Style
 }
@@ -86,6 +86,7 @@ func newBrowser(root string, items []entry) *browser {
 	d := list.NewDefaultDelegate()
 	d.SetSpacing(1)
 	l := list.New(videos, d, 76, 20)
+	l.SetShowPagination(false)
 	l.Title = "Videos"
 	l.SetStatusBarItemName("video", "videos")
 	l.KeyMap.Quit = key.NewBinding(key.WithKeys("q"), key.WithHelp("q", "quit"))
@@ -130,6 +131,7 @@ func (m *browser) applyTheme(dark bool) {
 		d.Styles.DimmedDesc = d.Styles.DimmedDesc.Foreground(m.muted.GetForeground())
 	}
 	m.list.SetDelegate(d)
+	m.delegate = d
 	m.list.Styles = list.DefaultStyles(dark)
 	m.list.Styles.Title = lipgloss.NewStyle().Foreground(pick(lipgloss.Color("#FFFFFF"), lipgloss.Color("#0F172A"))).Background(m.accent).Bold(true).Padding(0, 1)
 	m.list.Help.Styles = help.DefaultStyles(dark)
@@ -165,6 +167,7 @@ func (m *browser) resize(width, height int) {
 		listWidth -= m.previewWidth + 3
 	}
 	m.list.SetSize(max(8, listWidth), max(6, height-4))
+	m.clampViewport(false)
 }
 
 func (m *browser) Init() tea.Cmd {
@@ -220,25 +223,47 @@ func (m *browser) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, m.refreshPreview(true)
 			}
 		}
+		keys := m.list.KeyMap
+		follow := m.list.SettingFilter() || key.Matches(msg,
+			keys.CursorUp, keys.CursorDown, keys.PrevPage, keys.NextPage,
+			keys.GoToStart, keys.GoToEnd, keys.Filter, keys.ClearFilter)
 		m.list, cmd = m.list.Update(msg)
+		m.lastClick = time.Time{}
+		m.clampViewport(follow)
 	case tea.MouseWheelMsg:
-		// Preserve the user's chosen trackpad direction independently of keys.
-		direction := 0
-		switch msg.Button {
-		case tea.MouseWheelUp:
-			direction = 1
-		case tea.MouseWheelDown:
-			direction = -1
-		}
-		if direction == 0 || direction == m.scrollDirection && time.Since(m.lastScroll) < scrollInterval {
+		if !m.inLibrary(msg.X, msg.Y) {
 			return m, nil
 		}
-		m.lastScroll, m.scrollDirection = time.Now(), direction
-		if direction > 0 {
-			m.list.CursorDown()
-		} else {
-			m.list.CursorUp()
+		// Akari's mouse handler moves only the viewport, two entries per event.
+		switch msg.Button {
+		case tea.MouseWheelUp:
+			m.viewportOffset -= 2
+		case tea.MouseWheelDown:
+			m.viewportOffset += 2
 		}
+		m.lastClick = time.Time{}
+		m.clampViewport(false)
+		return m, nil
+	case tea.MouseClickMsg:
+		index, ok := m.itemAt(msg.X, msg.Y)
+		if msg.Button != tea.MouseLeft || !ok || m.list.SettingFilter() {
+			m.lastClick = time.Time{}
+			return m, nil
+		}
+		m.list.Select(index)
+		double := index == m.lastClickIndex && time.Since(m.lastClick) < 400*time.Millisecond
+		m.lastClickIndex, m.lastClick = index, time.Now()
+		if double {
+			e := m.list.SelectedItem().(videoItem).entry
+			m.chosen = &e
+			m.lastClick = time.Time{}
+			return m, tea.Quit
+		}
+	case list.FilterMatchesMsg:
+		m.list, cmd = m.list.Update(msg)
+		m.viewportOffset = 0
+		m.lastClick = time.Time{}
+		m.clampViewport(true)
 	default:
 		m.list, cmd = m.list.Update(msg)
 	}
@@ -279,7 +304,7 @@ func (m *browser) refreshPreview(force bool) tea.Cmd {
 
 func (m *browser) View() tea.View {
 	header := lipgloss.NewStyle().Foreground(m.accent).Bold(true).Render("VAULT") + "  " + m.muted.Render(ansi.Truncate(displayText(m.root), max(1, m.width-13), "…"))
-	body := lipgloss.NewStyle().Width(m.list.Width()).Render(m.list.View())
+	body := lipgloss.NewStyle().Width(m.list.Width()).Render(m.libraryView())
 	if m.previewWidth > 0 {
 		content := lipgloss.NewStyle().Foreground(m.accent).Bold(true).Render("PREVIEW")
 		if item, ok := m.list.SelectedItem().(videoItem); ok {
