@@ -74,9 +74,6 @@ func runWithAuthentication(args []string, auth func() error) error {
 	if len(args) == 1 {
 		root = args[0]
 	}
-	if err := auth(); err != nil {
-		return fmt.Errorf("Touch ID: %w", err)
-	}
 	var err error
 	root, err = filepath.Abs(root)
 	if err != nil {
@@ -85,6 +82,23 @@ func runWithAuthentication(args []string, auth func() error) error {
 	items, err := scan(root)
 	if err != nil {
 		return err
+	}
+	if len(items) == 0 {
+		return fmt.Errorf("no videos in directory: %s", root)
+	}
+	if command == "unlock" {
+		locked := false
+		for _, item := range items {
+			locked = locked || item.locked
+		}
+		if !locked {
+			return fmt.Errorf("no locked videos to restore: %s", root)
+		}
+	}
+	// Reject invalid or empty libraries before prompting. Browsing, playback,
+	// cache maintenance and all file changes still require authentication.
+	if err := auth(); err != nil {
+		return fmt.Errorf("Touch ID: %w", err)
 	}
 	switch command {
 	case "lock", "unlock":
