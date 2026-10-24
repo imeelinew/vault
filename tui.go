@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -41,7 +40,7 @@ func (i videoItem) Description() string {
 	if i.locked {
 		state = "LOCKED"
 	}
-	return state + "  ·  " + videoSize(i.size) + "  ·  " + displayText(i.dir)
+	return state + "  ·  " + videoSize(i.size)
 }
 func (i videoItem) FilterValue() string { return displayText(filepath.Join(i.dir, i.name)) }
 
@@ -81,11 +80,9 @@ func newBrowser(root string, items []entry) *browser {
 		dir, _ := filepath.Rel(root, filepath.Dir(e.path))
 		videos = append(videos, videoItem{e, dir})
 	}
-	sort.SliceStable(videos, func(i, j int) bool {
-		return strings.ToLower(videos[i].FilterValue()) < strings.ToLower(videos[j].FilterValue())
-	})
+	videos = orderTreeItems(videos)
 	d := list.NewDefaultDelegate()
-	d.SetSpacing(1)
+	d.SetSpacing(2)
 	l := list.New(videos, d, 76, 20)
 	l.SetShowPagination(false)
 	l.Title = "Videos"
@@ -116,17 +113,17 @@ func newBrowser(root string, items []entry) *browser {
 
 func (m *browser) applyTheme(dark bool) {
 	pick := lipgloss.LightDark(dark)
-	m.accent = pick(lipgloss.Color("#0F766E"), lipgloss.Color("#5EEAD4"))
+	m.accent = pick(lipgloss.Color("#2563EB"), lipgloss.Color("#60A5FA"))
 	m.text = lipgloss.NewStyle().Foreground(pick(lipgloss.Color("#1F2937"), lipgloss.Color("#DDDDDD")))
 	m.muted = lipgloss.NewStyle().Foreground(pick(lipgloss.Color("#526174"), lipgloss.Color("#8892A6")))
 	m.panel = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(pick(lipgloss.Color("#64748B"), lipgloss.Color("#3B4558")))
 
 	d := list.NewDefaultDelegate()
-	d.SetSpacing(1)
+	d.SetSpacing(2)
 	d.Styles = list.NewDefaultItemStyles(dark)
-	m.selection = lipgloss.NewStyle().Background(pick(lipgloss.Color("#CCFBF1"), lipgloss.Color("#134E4A")))
-	d.Styles.SelectedTitle = m.selection.Foreground(pick(lipgloss.Color("#134E4A"), lipgloss.Color("#F0FDFA"))).Bold(true).PaddingLeft(2)
-	d.Styles.SelectedDesc = m.selection.Foreground(pick(lipgloss.Color("#115E59"), lipgloss.Color("#CCFBF1"))).PaddingLeft(2)
+	m.selection = lipgloss.NewStyle().Background(pick(lipgloss.Color("#DBEAFE"), lipgloss.Color("#1E3A5F")))
+	d.Styles.SelectedTitle = m.selection.Foreground(pick(lipgloss.Color("#1E3A8A"), lipgloss.Color("#EFF6FF"))).Bold(true).PaddingLeft(2)
+	d.Styles.SelectedDesc = m.selection.Foreground(pick(lipgloss.Color("#1D4ED8"), lipgloss.Color("#BFDBFE"))).PaddingLeft(2)
 	if !dark {
 		d.Styles.NormalDesc = d.Styles.NormalDesc.Foreground(m.muted.GetForeground())
 		d.Styles.DimmedTitle = d.Styles.DimmedTitle.Foreground(m.muted.GetForeground())
@@ -137,13 +134,14 @@ func (m *browser) applyTheme(dark bool) {
 	m.list.Styles = list.DefaultStyles(dark)
 	m.list.Styles.Title = lipgloss.NewStyle().Foreground(pick(lipgloss.Color("#FFFFFF"), lipgloss.Color("#0F172A"))).Background(m.accent).Bold(true).Padding(0, 1)
 	m.list.Help.Styles = help.DefaultStyles(dark)
+	m.list.Help.Styles.ShortKey = lipgloss.NewStyle().Foreground(m.accent)
+	m.list.Help.Styles.FullKey = m.list.Help.Styles.ShortKey
 	if !dark {
 		m.list.Styles.StatusBar = m.list.Styles.StatusBar.Foreground(m.muted.GetForeground())
 		m.list.Styles.StatusEmpty = m.muted
 		m.list.Styles.NoItems = m.muted
 		m.list.Styles.StatusBarFilterCount = m.muted
 		m.list.Styles.StatusBarActiveFilter = m.text
-		m.list.Help.Styles.ShortKey, m.list.Help.Styles.FullKey = m.text, m.text
 		m.list.Help.Styles.ShortDesc, m.list.Help.Styles.FullDesc = m.muted, m.muted
 		m.list.Help.Styles.ShortSeparator, m.list.Help.Styles.FullSeparator = m.muted, m.muted
 		m.list.Help.Styles.Ellipsis = m.muted
@@ -236,7 +234,7 @@ func (m *browser) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !m.inLibrary(msg.X, msg.Y) {
 			return m, nil
 		}
-		// Akari's mouse handler moves only the viewport, two entries per event.
+		// Move only the viewport, two tree rows per event.
 		switch msg.Button {
 		case tea.MouseWheelUp:
 			m.viewportOffset -= 2

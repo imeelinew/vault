@@ -45,9 +45,9 @@ func (p *progress) advance(n float64) {
 func (p *progress) finish(err error) { p.draw(true, err) }
 
 func (p *progress) draw(final bool, err error) {
-	verb, color := "Locking", lipgloss.Color("#5EEAD4")
+	verb, color := "Locking", lipgloss.Color("#60A5FA")
 	if p.unlock {
-		verb, color = "Unlocking", lipgloss.Color("#C4B5FD")
+		verb = "Unlocking"
 	}
 	percent := 0
 	if p.total > 0 {
@@ -55,7 +55,7 @@ func (p *progress) draw(final bool, err error) {
 	}
 	if final {
 		if err == nil {
-			verb, color, percent = "Locked", lipgloss.Color("#86EFAC"), 100
+			verb, percent = "Locked", 100
 			if p.unlock {
 				verb = "Unlocked"
 			}
@@ -77,10 +77,7 @@ func (p *progress) draw(final bool, err error) {
 	if sizeErr != nil {
 		width = 80
 	}
-	endColor := lipgloss.Color("#60A5FA")
-	if p.unlock {
-		endColor = lipgloss.Color("#F0ABFC")
-	}
+	endColor := lipgloss.Color("#93C5FD")
 	if final {
 		endColor = color
 	}

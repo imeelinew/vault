@@ -7,6 +7,7 @@ import (
 
 	"charm.land/bubbles/v2/list"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // Render the viewport as a single block in a copy of the list. The live list
@@ -27,23 +28,35 @@ func (d viewportDelegate) Render(w io.Writer, _ list.Model, _ int, _ list.Item) 
 func (m *browser) viewportCapacity() int { return max(1, m.list.Paginator.PerPage) }
 
 func (m *browser) clampViewport(follow bool) {
-	capacity := m.viewportCapacity()
+	rows := m.treeLines()
+	capacity := m.viewportRows()
 	if follow {
-		index := m.list.Index()
-		if index < m.viewportOffset {
-			m.viewportOffset = index
-		} else if index >= m.viewportOffset+capacity {
-			m.viewportOffset = index - capacity + 1
+		first, last := -1, -1
+		for row, line := range rows {
+			if line.item == m.list.Index() {
+				if first < 0 {
+					first = row
+				}
+				last = row
+			}
+		}
+		if first >= 0 && first < m.viewportOffset {
+			m.viewportOffset = first
+		} else if last >= m.viewportOffset+capacity {
+			m.viewportOffset = last - capacity + 1
+		}
+		if m.list.Index() == 0 && last < capacity {
+			m.viewportOffset = 0
 		}
 	}
-	m.viewportOffset = min(max(0, m.viewportOffset), max(0, len(m.list.VisibleItems())-capacity))
+	m.viewportOffset = min(max(0, m.viewportOffset), max(0, len(rows)-capacity))
 }
 
 func (m *browser) viewportList(content string) list.Model {
 	view := m.list
 	view.SetDelegate(viewportDelegate{
 		DefaultDelegate: m.delegate,
-		height:          m.viewportCapacity() * (m.delegate.Height() + m.delegate.Spacing()),
+		height:          m.viewportRows(),
 		content:         content,
 	})
 	view.Select(0)
@@ -56,25 +69,46 @@ func (m *browser) libraryView() string {
 		return m.list.View()
 	}
 	var content strings.Builder
-	end := min(len(items), m.viewportOffset+m.viewportCapacity())
-	delegate := m.delegate
-	delegate.Styles.SelectedTitle = delegate.Styles.SelectedTitle.Width(m.list.Width())
-	delegate.Styles.SelectedDesc = delegate.Styles.SelectedDesc.Width(m.list.Width())
-	for index := m.viewportOffset; index < end; index++ {
-		if index > m.viewportOffset {
+	rows := m.treeLines()
+	end := min(len(rows), m.viewportOffset+m.viewportRows())
+	blocks := make(map[int][]string)
+	for row := m.viewportOffset; row < end; row++ {
+		if row > m.viewportOffset {
 			content.WriteByte('\n')
 		}
-		var item strings.Builder
-		delegate.Render(&item, m.list, index, items[index])
-		block := lipgloss.NewStyle()
-		if index == m.list.Index() && !m.list.SettingFilter() {
-			block = m.selection.Width(m.list.Width())
+		line := rows[row]
+		prefix := m.treePrefix(line.prefix)
+		width := m.list.Width() - ansi.StringWidth(prefix)
+		if line.item < 0 {
+			content.WriteString(m.muted.Render(prefix) + lipgloss.NewStyle().Foreground(m.accent).Bold(true).Render(ansi.Truncate(displayText(line.directory), width, "…")))
+			continue
 		}
-		// Include the item's clickable spacing in its selection background.
-		content.WriteString(block.Height(delegate.Height() + delegate.Spacing()).Render(item.String()))
+		if blocks[line.item] == nil {
+			blocks[line.item] = m.treeItemLines(line.item, width)
+		}
+		prefixStyle := m.muted
+		if line.item == m.list.Index() && !m.list.SettingFilter() {
+			prefixStyle = prefixStyle.Foreground(m.accent)
+		}
+		content.WriteString(prefixStyle.Render(prefix) + blocks[line.item][line.part])
 	}
 	view := m.viewportList(content.String())
 	return view.View()
+}
+
+func (m *browser) treeItemLines(index, width int) []string {
+	view := m.list
+	view.SetWidth(width)
+	delegate := m.delegate
+	delegate.Styles.SelectedTitle = delegate.Styles.SelectedTitle.Width(width)
+	delegate.Styles.SelectedDesc = delegate.Styles.SelectedDesc.Width(width)
+	var item strings.Builder
+	delegate.Render(&item, view, index, m.list.VisibleItems()[index])
+	block := lipgloss.NewStyle()
+	if index == m.list.Index() && !m.list.SettingFilter() {
+		block = m.selection.Width(width)
+	}
+	return strings.Split(block.Padding(1, 0).Height(delegate.Height()+delegate.Spacing()).Render(item.String()), "\n")
 }
 
 // Ask the list renderer where content begins so clicks track the actual title,
@@ -93,7 +127,7 @@ func (m *browser) libraryTop() int {
 func (m *browser) inLibrary(x, y int) bool {
 	top := m.libraryTop()
 	return top >= 0 && x >= 2 && x < 2+m.list.Width() && y >= top &&
-		y < min(m.height-1, top+m.viewportCapacity()*(m.delegate.Height()+m.delegate.Spacing()))
+		y < min(m.height-1, top+m.viewportRows())
 }
 
 func (m *browser) itemAt(x, y int) (int, bool) {
@@ -101,8 +135,12 @@ func (m *browser) itemAt(x, y int) (int, bool) {
 		return 0, false
 	}
 	row := y - m.libraryTop()
-	stride := m.delegate.Height() + m.delegate.Spacing()
-	index := m.viewportOffset + row/stride
-	// The gap below an item belongs to its hit area as well.
-	return index, index < len(m.list.VisibleItems())
+	rows := m.treeLines()
+	row += m.viewportOffset
+	if row >= len(rows) {
+		return 0, false
+	}
+	index := rows[row].item
+	// Both padding rows belong to the item's hit area as well.
+	return index, index >= 0
 }
