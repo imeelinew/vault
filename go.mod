@@ -2,6 +2,8 @@ module github.com/imeelinew/vault
 
 go 1.27.2
 
+replace charm.land/bubbletea/v2 => ./third_party/bubbletea
+
 require (
 	charm.land/bubbles/v2 v2.2.1
 	charm.land/bubbletea/v2 v2.1.0

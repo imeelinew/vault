@@ -321,6 +321,7 @@ func (m *browser) View() tea.View {
 	}
 	v := tea.NewView(m.text.Margin(1, 2).Render(header + "\n\n" + body))
 	v.AltScreen = true
+	v.DisableScrollOptimization = m.previewWidth > 0
 	v.MouseMode = tea.MouseModeCellMotion
 	return v
 }
