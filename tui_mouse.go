@@ -92,5 +92,6 @@ func (m *browser) itemAt(x, y int) (int, bool) {
 	row := y - m.libraryTop()
 	stride := m.delegate.Height() + m.delegate.Spacing()
 	index := m.viewportOffset + row/stride
-	return index, row%stride < m.delegate.Height() && index < len(m.list.VisibleItems())
+	// The gap below an item belongs to its hit area as well.
+	return index, index < len(m.list.VisibleItems())
 }

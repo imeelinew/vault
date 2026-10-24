@@ -50,7 +50,7 @@ func TestMouseSelectionAndDoubleClick(t *testing.T) {
 	m := mouseBrowser(t, 40)
 	m.viewportOffset = 6
 	top := m.libraryTop()
-	click := tea.MouseClickMsg{X: 5, Y: top + 3, Button: tea.MouseLeft}
+	click := tea.MouseClickMsg{X: 5, Y: top + 5, Button: tea.MouseLeft}
 	m.Update(click)
 	if m.list.Index() != 7 || m.chosen != nil || m.viewportOffset != 6 {
 		t.Fatal("single click did not select the visible item")
@@ -64,7 +64,7 @@ func TestMouseSelectionAndDoubleClick(t *testing.T) {
 func TestMouseHitRegionsAndBounds(t *testing.T) {
 	m := mouseBrowser(t, 40)
 	top := m.libraryTop()
-	for _, pos := range [][2]int{{0, top}, {5, top - 1}, {5, top + 2}, {2 + m.list.Width(), top}, {5, m.height - 1}} {
+	for _, pos := range [][2]int{{0, top}, {5, top - 1}, {2 + m.list.Width(), top}, {5, m.height - 1}} {
 		if _, ok := m.itemAt(pos[0], pos[1]); ok {
 			t.Fatalf("non-item hit at %v", pos)
 		}
