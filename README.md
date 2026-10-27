@@ -1,15 +1,13 @@
 # vault
 
-**[English](README_EN.md)** · 中文
-
-macOS 视频隐藏工具，视频通过 IINA 播放。
+A macOS video hiding tool that plays videos through IINA.
 
 ```sh
-v [目录]           # 浏览并播放
-v lock [目录]      # 隐藏视频
-v unlock [目录]    # 还原视频
+v [directory]          # browse and play
+v lock [directory]     # hide videos
+v unlock [directory]   # restore videos
 ```
 
-`[目录]` 默认为当前目录。
+`[directory]` defaults to the current directory.
 
-浏览时，方向键移动，触摸板或滚轮滚动，单击选中，双击或 `Enter` 播放，`/` 搜索，`p` 预览，`q` 退出。
+While browsing, use the arrow keys to move, the trackpad or wheel to scroll, click to select, double-click or press `Enter` to play, `/` to search, `p` to preview, and `q` to quit.
